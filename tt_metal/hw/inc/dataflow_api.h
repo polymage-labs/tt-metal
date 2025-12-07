@@ -29,6 +29,24 @@
 
 // clang-format off
 /**
+ * Retinterprets the bits of `src` of type `U` as a value of type `T` and
+ * returns it. Both types must be of the same size.
+ * 
+ * Return value: The bitcasted value.
+ */
+// clang-format on
+template<typename T, typename U>
+inline T bitcast(U src) {
+    static_assert(
+        sizeof(T) == sizeof(U),
+        "bitcast requires source and destination to be of the same size");
+    T dst;
+    std::memcpy(&dst, &src, sizeof(T));
+    return dst;
+}
+
+// clang-format off
+/**
  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
  * is the one relative to the origin of the physical grid.
  *
