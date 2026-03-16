@@ -56,8 +56,8 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(
-        icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+MATH((llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(
+    icb0, icb1, 0 /*transpose*/, acc_to_dest)));
 
     if constexpr (full_init) {
         UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
@@ -74,7 +74,7 @@ ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = fal
  * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) { binary_tiles_init<true, ELWMUL>(icb0, icb1); }
+ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) { binary_tiles_init<true, ELWMUL>(icb0, icb1, false); }
 
 // clang-format off
 /**

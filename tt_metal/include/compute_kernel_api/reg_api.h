@@ -75,8 +75,16 @@ ALWI void release_dst() {
 ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<DST_ACCUM_MODE>())); }
 
 /**
- * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
+ * Release lock on DST register by PACK thread. The lock had to be
+ * previously acquired with tile_regs_wait. When is_full_dst_sync_en is
+ * true and DST sync mode is SyncFull, zeroing of the DST register is
+ * skipped, allowing subsequent pack operations to read DST before the
+ * next math operation overwrites it.
  */
-ALWI void tile_regs_release() { PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>())); }
+template <bool is_full_dst_sync_en = false>
+ALWI void tile_regs_release() {
+    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE,
+                                     is_full_dst_sync_en>()));
+}
 
 }  // namespace ckernel

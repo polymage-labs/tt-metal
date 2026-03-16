@@ -300,9 +300,10 @@ inline void llk_packer_set_math_semaphore() {
     _llk_packer_set_math_semaphore_<WaitRes>();
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool is_full_dst_sync_en = false>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en,
+                                 is_full_dst_sync_en>();
 }
 
 template <bool untilize = false, bool diagonal = false>
