@@ -4,6 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "conv_reader_common.hpp"
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
@@ -71,6 +74,11 @@ void kernel_main() {
     // coalesce reads along weight_size_w
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
+    DPRINT << "coalesced_read_bytes: " << coalesced_read_bytes << ENDL();
+    DPRINT << "activation_reuse_enabled: " << (uint32_t)activation_reuse_enabled << ENDL();
+    DPRINT << "act_num_blocks_h: " << act_num_blocks_h << ENDL();
+    DPRINT << "window_outer: " << window_outer << ENDL();
+    DPRINT << "act_block_num_tiles: " << act_block_num_tiles << ENDL();
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);

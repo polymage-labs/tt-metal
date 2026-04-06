@@ -147,6 +147,7 @@ static inline void write_stick_async(
         const uint32_t size = transfer_size * StickSizeBytes;
         const uint32_t src_addr = in_base_l1_addr + src_offset;
         const uint64_t dst_addr = out_base_l1_addr + dst_offset;
+        DPRINT << "Stick size:" << size << ENDL();
         noc_async_write(src_addr, dst_addr, size);
     } else {
         const uint32_t src_offset = src_offset_id * StickSizeBytes;
@@ -179,6 +180,8 @@ static inline void run_halo_gather(const tt_l1_ptr uint16_t* config, uint32_t my
     uint16_t current_config_index = 0;
     uint16_t number_of_segments_remaining = config[current_config_index++];
 
+    DPRINT << " calling run_halo_gather" << ENDL();
+    DPRINT << "number_of_segments_remaining: " << number_of_segments_remaining << ENDL();
     if (number_of_segments_remaining == 0) {
         return;
     }

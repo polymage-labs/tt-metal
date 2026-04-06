@@ -123,6 +123,10 @@ std::vector<CBInfo> get_cb_info(
             output_datatype,
             conv_config.enable_activation_reuse));
 
+    std::cout << "split_reader_enabled: " << split_reader_enabled << std::endl;
+    std::cout << "act_block_h_ntiles: " << block_config.act_block_h_ntiles << std::endl;
+    std::cout << "act_block_w_ntiles: " << block_config.act_block_w_ntiles << std::endl;
+
     // Block dims
     if (!split_reader_enabled || is_1d_depthwise_conv) {
         act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
@@ -160,6 +164,9 @@ std::vector<CBInfo> get_cb_info(
 
     const uint32_t per_core_out_ntiles =
         pconfig.per_core_out_matrix_height_ntile * pconfig.per_core_out_matrix_width_ntile;
+
+    std::cout << "output height ntiles: " << pconfig.per_core_out_matrix_height_ntile << std::endl;
+    std::cout << "output width ntiles: " << pconfig.per_core_out_matrix_width_ntile << std::endl;
 
     const uint32_t num_blocks_act_w = weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
 
@@ -222,6 +229,7 @@ std::vector<CBInfo> get_cb_info(
         const tt::DataFormat act_cb_data_format =
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
         const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
+        std::cout << "act_cb_tile_size: " << act_cb_tile_size << std::endl;
         // ACT CB plays a different role depending on the sharding scheme
         // In block sharded convs, ACT CB is used for mcasting activations and needs full activation block size
         // regardless of split reader.

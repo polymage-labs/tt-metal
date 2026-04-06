@@ -40,11 +40,13 @@ FORCE_INLINE void read_sticks(
     uint32_t& l1_write_addr_act,
     uint32_t& reader_idx) {
     uint16_t num_segments = packed_reader_indices_ptr[reader_idx] & 0xffff;
-
+    DPRINT << "num_segments: " << num_segments << ENDL();
     while (num_segments--) {
         reader_idx++;
         uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
         uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+
+        DPRINT << "num_iters: " << (end_ind - start_ind) / stride_w << ENDL();
 
         if constexpr (dilation_w == 1) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
@@ -224,6 +226,11 @@ FORCE_INLINE void read_sticks_activation_reuse(
     num_segments--;
     load_next_segment<window_inner, single_core_processes_multiple_batches>(
         packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
+
+    DPRINT << "readers_process_full_image_widths: " << (uint32_t)readers_process_full_image_widths << ENDL();
+    DPRINT << "output_image_width_full_tile: " << (uint32_t)output_image_width_full_tile << ENDL();
+    DPRINT << "single_core_processes_multiple_batches: " << (uint32_t)single_core_processes_multiple_batches << ENDL();
+    DPRINT << "num_segments: " << num_segments << ENDL();
 
     if constexpr (!readers_process_full_image_widths) {
         if (num_segments) {

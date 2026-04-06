@@ -328,6 +328,10 @@ class ResNet50TestInfra:
 
         batch_size = output_tensor.shape[0]
 
+        # print(self.torch_output_tensor)
+        # print(output_tensor)
+        # import pdb
+        # pdb.set_trace()
         valid_pcc = 0.98
         self.pcc_passed, self.pcc_message = check_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
         assert self.pcc_passed, self.pcc_message

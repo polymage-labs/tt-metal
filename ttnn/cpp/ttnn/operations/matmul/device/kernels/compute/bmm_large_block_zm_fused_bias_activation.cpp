@@ -138,6 +138,7 @@ inline void reblock_and_untilize(
 void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
+    DPRINT << "MATMUL_DRAM_SHARDED----" << ENDL();
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
     // if not worker core, skip
     if (not is_worker_core) {
@@ -182,6 +183,7 @@ void kernel_main() {
     constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
 #ifdef FUSE_BIAS
+    DPRINT << "FUSE_BIAS----" << ENDL();
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
 #else
@@ -189,10 +191,12 @@ void kernel_main() {
 #endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
+    DPRINT << "SFPU_OP_INIT_ACTIVATION----" << ENDL();
     SFPU_OP_INIT_ACTIVATION
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
+    DPRINT << "IN1_TRANSPOSE_TILE----" << ENDL();
     constexpr uint32_t in1_transpose_tile = true;
 #else
     constexpr uint32_t in1_transpose_tile = false;
@@ -200,6 +204,13 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
+    DPRINT << "batch: " << batch << ENDL();
+    DPRINT << "num_blocks_h_dim: " << num_blocks_h_dim << ENDL();
+    DPRINT << "num_blocks_w_dim: " << num_blocks_w_dim << ENDL();
+    DPRINT << "num_blocks_inner_dim: " << num_blocks_inner_dim << ENDL();
+    DPRINT << "in0_num_subblocks: " << in0_num_subblocks << ENDL();
+    DPRINT << "in1_num_subblocks: " << in1_num_subblocks << ENDL();
+    DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
@@ -220,6 +231,7 @@ void kernel_main() {
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
 #ifdef PACK_RELU
+                DPRINT << "PACK_RELU----" << ENDL();
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
@@ -241,6 +253,7 @@ void kernel_main() {
 #endif
 
                     if constexpr (in0_transpose_tile) {
+                        DPRINT << "IN0_TRANSPOSE_TILE----" << ENDL();
                         transpose_wh_init_short(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
@@ -273,6 +286,7 @@ void kernel_main() {
                             }
 
 #ifndef SKIP_COMPUTE
+
                             // Compute output sub-block
                             uint32_t dst_index =
                                 0;  // start at 0, each call to matmul_block internally increments dst_index
@@ -348,6 +362,8 @@ void kernel_main() {
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
+
+                                DPRINT << "PACK_RELU----" << ENDL();
                                 if (block == 0) {  // no accumulation for first iteration
                                     PACK((llk_pack_reconfig_l1_acc(0)));
                                 } else if (block == 1) {

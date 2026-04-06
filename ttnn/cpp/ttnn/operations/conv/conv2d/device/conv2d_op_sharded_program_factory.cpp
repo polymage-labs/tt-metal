@@ -358,6 +358,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const uint32_t act_matrix_height_ntiles = out_block_h_ntiles * parallelization_config.num_cores_nhw;
     const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
 
+    std::cout << "act_matrix_height_ntiles: " << act_matrix_height_ntiles << std::endl;
+
     if (has_bias) {
         if (is_conv_1d_depthwise_conv) {
             TT_THROW("Bias is not supported for depthwise conv1d");
@@ -555,6 +557,11 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         per_core_out_matrix_height_ntiles,
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
+
+    std::cout << "per_core_out_matrix_height_ntiles: " << per_core_out_matrix_height_ntiles << std::endl;
+    std::cout << "per_core_out_matrix_width_ntiles: " << per_core_out_matrix_width_ntiles << std::endl;
+    std::cout << "act_block_h_ntiles: " << act_block_h_ntiles << std::endl;
+    std::cout << "num_blocks_act_h_per_core: " << num_blocks_act_h_per_core << std::endl;
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(

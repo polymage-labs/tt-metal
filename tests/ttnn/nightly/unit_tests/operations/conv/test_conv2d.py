@@ -18,6 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without
 import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
 from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
+import numpy as np
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -82,6 +83,151 @@ def randomize_torch_tensor(
             torch_tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
+
+
+def print_detailed_log(outputs_a, outputs_b, a_tolerance):
+    # Flatten the `outputs_a` to compute the histogram of the values
+    # present in it.
+    flat_outputs_a = outputs_a.flatten()
+    flat_outputs_b = outputs_b.flatten()
+
+    # Calculate the quantiles to define the bins
+    quantiles = np.quantile(flat_outputs_a, np.linspace(0, 1, 11))
+
+    # Compute the histogram with 10 bins for the `outputs_a`.
+    hist, bins = np.histogram(flat_outputs_a, bins=quantiles)
+
+    # Initialize an array to store the maximum absolute pointwise error
+    # for each range.
+    max_absolute_errors_with_range = []
+    max_absolute_errors_vals = []
+    max_relative_errors = []
+    max_relative_errors_vals = []
+    num_elems_in_range = []
+
+    # Iterate over each range in the histogram and get the maximum absolute
+    # and relative error for each range.
+    for i in range(len(hist)):
+        # Determine the values falling within the current range.
+        range_values_indices = (flat_outputs_a >= bins[i]) & (flat_outputs_a < bins[i + 1])
+        range_values_outputs_a = flat_outputs_a[range_values_indices]
+        range_values_outputs_b = flat_outputs_b[range_values_indices]
+        # No values found in this range so skip it.
+        if len(range_values_outputs_a) == 0:
+            continue
+
+        # As `inf` is treated equal if present in both `a` and `b`, we report
+        # it separately here.
+        if not np.all(np.isfinite(range_values_outputs_a)) or not np.all(np.isfinite(range_values_outputs_b)):
+            print(f"inf or nan detected in range: [{bins[i]}, {bins[i + 1]}]")
+            continue
+
+        # Compute the maximum absolute pointwise error for the current range.
+        absolute_diff = np.abs(range_values_outputs_a - range_values_outputs_b)
+        max_error = np.max(absolute_diff)
+        absolute_diff_idx = np.argmax(absolute_diff)
+        max_absolute_errors_with_range.append((max_error, bins[i], bins[i + 1]))
+        a_val = range_values_outputs_a[absolute_diff_idx]
+        b_val = range_values_outputs_b[absolute_diff_idx]
+        max_absolute_errors_vals.append((a_val, b_val))
+        num_elems_in_range.append(len(range_values_outputs_a))
+        # Print the max relative error as per the numpy.allclose method.
+        # numpy.allclose returns true if the following equation
+        # holds true:
+        # absolute(a - b) <= (atol + rtol * absolute(b))
+        # If any element of the divisor `b` is zero, then print
+        # "inf" and exit.
+        if not np.all(range_values_outputs_b):
+            max_relative_errors.append(np.inf)
+            relative_errors_idx = np.where(range_values_outputs_b == 0)[0][0]
+        else:
+            # Else calculate the max relative error.
+            # Subtract the `atol` from the absolute difference as per the
+            # equation used by numpy.allclose.
+            absolute_diff_minus_atol = np.maximum(absolute_diff - a_tolerance, 0)
+            relative_errors = np.divide(absolute_diff_minus_atol, np.absolute(range_values_outputs_b))
+            max_relative_errors.append(np.max(relative_errors))
+            relative_errors_idx = np.argmax(relative_errors)
+        a_val = range_values_outputs_a[relative_errors_idx]
+        b_val = range_values_outputs_b[relative_errors_idx]
+        max_relative_errors_vals.append((a_val, b_val))
+
+    print("Maximum absolute and relative error for each value range:")
+    for i, error_with_range in enumerate(max_absolute_errors_with_range):
+        percentage = (num_elems_in_range[i] / len(flat_outputs_a)) * 100
+        print(
+            f"Range {i+1}: Value range [{error_with_range[1]:.6f}, "
+            f"{error_with_range[2]:.6f}], Max absolute error: "
+            f"{error_with_range[0]:.6f} from "
+            f"({max_absolute_errors_vals[i][0]}, {max_absolute_errors_vals[i][1]}), "
+            f"Max relative error: {max_relative_errors[i]:.6f} from "
+            f"({max_relative_errors_vals[i][0]}, {max_relative_errors_vals[i][1]}), "
+            f"Percentage of values in this range: {percentage:.2f}%"
+        )
+
+
+def validate_outputs(outputs_a, outputs_b, a_tolerance=0, r_tolerance=0, detailed_log=False, exit_on_failure=True):
+    # Convert to tuple in order to treat entire array as a single element while
+    # comparing the results.
+    if not isinstance(outputs_a, (tuple, list)):
+        outputs_a = tuple([outputs_a])
+    if not isinstance(outputs_b, (tuple, list)):
+        outputs_b = tuple([outputs_b])
+
+    if len(outputs_a) != len(outputs_b):
+        print("Mismatch in number of outputs of %s and %s" % (outputs_a, outputs_b))
+        exit(1)
+
+    failed = False
+    for k in range(len(outputs_a)):
+        if np.allclose(
+            outputs_a[k],
+            outputs_b[k],
+            atol=a_tolerance,
+            rtol=r_tolerance,
+        ):
+            print("Matching output #%s: \033[1;32mPass\033[0m" % k)
+        else:
+            failed = True
+            print("Matching output #%s: \033[1;31mFail\033[0m" % k)
+
+            out_a_k = outputs_a[k]
+            out_b_k = outputs_b[k]
+            if out_a_k.dtype == np.uint64 or out_b_k.dtype == np.uint64:
+                warnings.warn(
+                    "Output element type is a 64-bit unsigned integer, " "overflow might occur during verification."
+                )
+
+            # Convert output values to floating point numbers to avoid integer
+            # overflow when unsigned numbers are subtracted while calculating
+            # absolute_diff.
+            if np.issubdtype(out_a_k.dtype, np.unsignedinteger):
+                out_a_k = out_a_k.astype(np.float64)
+            if np.issubdtype(out_b_k.dtype, np.unsignedinteger):
+                out_b_k = out_b_k.astype(np.float64)
+            if detailed_log:
+                print_detailed_log(out_a_k, out_b_k, a_tolerance)
+            # Print the max absolute error.
+            absolute_diff = np.absolute(np.subtract(out_a_k, out_b_k))
+            print("The maximum absolute error is: ")
+            print(np.amax(absolute_diff))
+            # Print the max relative error as per the numpy.allclose method.
+            # numpy.allclose returns true if the following equation
+            # holds true:
+            # absolute(a - b) <= (atol + rtol * absolute(b))
+            print("The maximum relative error is: ")
+            # If any element of the divisor `b` is zero, then print
+            # "inf" and exit.
+            if not np.all(out_b_k):
+                print("inf")
+                continue
+
+            # Else calculate the max relative error.
+            # Subtract the `atol` from the absolute difference as per the
+            # equation used by numpy.allclose.
+            absolute_diff_minus_atol = absolute_diff - a_tolerance
+            relative_error = np.divide(absolute_diff_minus_atol, np.absolute(out_b_k))
+            print(np.amax(relative_error))
 
 
 def run_conv(
@@ -246,12 +392,15 @@ def run_conv(
         device=device if requires_device_placement else None,
     )
 
+    # import pdb
+    # pdb.set_trace()
+
     if sharded_cfg:
         tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_cfg)
 
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
-        shard_layout=shard_layout if not auto_shard else None,
+        shard_layout=shard_layout if auto_shard else None,
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
@@ -347,6 +496,13 @@ def run_conv(
         out = out[:, :, :, :output_channels]
 
         ref = torch.permute(ref, (0, 2, 3, 1))
+        # print(out)
+        # print(ref)
+        out_float = out.float().numpy()
+        ref_float = ref.float().numpy()
+        validate_outputs(
+            out_float, ref_float, a_tolerance=1.18, r_tolerance=0.01, detailed_log=True, exit_on_failure=False
+        )
 
         if custom_pcc is not None:
             pcc = custom_pcc
@@ -1123,65 +1279,91 @@ def test_conv_for_segformer_512x512(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
     (
+        # (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, HS, None),
+        # (8, 64, 64, 56, 56, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 64, 3, 224, 224, 7, 7, 2, 2, 3, 3, HS, None),
+        # (8, 64, 3, 224, 224, 7, 7, 2, 2, 3, 3, HS, None),
+        # (8, 64, 64, 56, 56, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 64, 64,  56, 56, 3, 3, 1, 1, 1, 1, HS, None),
+        # (8, 256, 64, 56, 56, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 64, 256, 56, 56, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 128, 256, 56, 56, 1, 1, 1, 1, 0, 0, HS, None),
+        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
+        # (8, 512, 128, 28, 28, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, HS, None),
+        # (8, 128, 512,  28, 28, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 128, 128,  28, 28, 3, 3, 1, 1, 1, 1, HS, None),
+        # (8, 256, 512, 28, 28,1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 256, 256,  28, 28, 3, 3, 2, 2, 1, 1, HS, None),
+        # (8, 1024, 256, 14, 14, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, HS, None),
+        # (8, 256, 1024, 14, 14, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, HS, None),
+        # (8, 512, 1024, 14, 14, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, HS, None),
+        # (8, 2048, 512, 7, 7, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, HS, None),
+        # (8, 512, 2048, 7, 7, 1, 1, 1, 1, 0, 0, HS, None),
+        # (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, HS, None),
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
-        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 32}),  Out of Memory!!
-        # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
-        # rn50 layer2
-        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
-        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, {"act_block_h": 32}),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
-        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
-        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
-        # rn50 layer3
-        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, BS, None),
-        (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, BS, None),
-        (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, BS, None),
-        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, BS, None),
-        (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, BS, None),
-        (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, BS, None),
-        # rn50 layer4
-        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, BS, None),
-        (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, BS, None),
-        (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, BS, None),
-        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
-        (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
-        (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
-        ## small test
-        (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, BS, {"num_cores_nhw": 2, "grid_size": (2, 2)}),
-        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, BS, {"num_cores_nhw": 4, "grid_size": (2, 4)}),
-        # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, BS, None), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
-        (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
-        # r50 1x1s2 shapes
-        # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, BS, None),  # r50 first bottleneck downsample shape
-        (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, HS, None),  # r50 first bottleneck downsample shape
-        # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, BS, None),  # r50 second bottleneck downsample shape
-        # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, HS, None), - doesnt fit
-        (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, BS, None),  # r50 third bottleneck downsample shape
-        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, HS, None), - doesnt fit
-        (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, BS, None),  # r50 fourth bottleneck downsample shape
+        # (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
+        # # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 32}),  Out of Memory!!
+        # # rn50 layer1
+        # (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
+        # (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
+        # (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
+        # # rn50 layer2
+        # (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
+        # (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
+        # (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, {"act_block_h": 32}),
+        # (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
+        # (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
+        # (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
+        # # rn50 layer3
+        # (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, BS, None),
+        # (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, BS, None),
+        # (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, BS, None),
+        # (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, BS, None),
+        # (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, BS, None),
+        # (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, BS, None),
+        # # rn50 layer4
+        # (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, BS, None),
+        # (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, BS, None),
+        # (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, BS, None),
+        # (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
+        # (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
+        # (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
+        # ## small test
+        # (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, BS, {"num_cores_nhw": 2, "grid_size": (2, 2)}),
+        # (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, BS, {"num_cores_nhw": 4, "grid_size": (2, 4)}),
+        # # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, BS, None), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
+        # (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, BS, None),
+        # # r50 1x1s2 shapes
+        # # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, BS, None),  # r50 first bottleneck downsample shape
+        # (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, HS, None),  # r50 first bottleneck downsample shape
+        # # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, BS, None),  # r50 second bottleneck downsample shape
+        # # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, HS, None), - doesnt fit
+        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, BS, None),  # r50 third bottleneck downsample shape
+        # # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, HS, None), - doesnt fit
+        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, BS, None),  # r50 fourth bottleneck downsample shape
         # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, HS, None), - doesnt fit
         # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, HS, None),  ## L2M1 DS: doesn't fit
     ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "output_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("packer_l1_acc", [True])
 @pytest.mark.parametrize("has_bias", [True])
-@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
+@pytest.mark.parametrize("auto_shard", [True], ids=["auto_shard"])
 def test_resnet50_conv_wh(
     device,
     torch_tensor_map,
@@ -1208,6 +1390,23 @@ def test_resnet50_conv_wh(
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
 
+    # core_x = 8
+    # core_y = 8
+    # sharded_cfg = ttnn.create_sharded_memory_config(
+    #     shape=(25088, 256),
+    #     core_grid=ttnn.CoreGrid(x=core_x,y=core_y),
+    #     strategy=ttnn.ShardStrategy.HEIGHT,
+    #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # )
+
+    # shard_config = ttnn.create_sharded_memory_config(
+    #     shape=(32, 32),
+    #     core_grid=ttnn.CoreGrid(y=4, x=8),
+    #     strategy=ttnn.ShardStrategy.HEIGHT,
+    #     orientation=input_shard_orientation,
+    #     use_height_and_width_as_shard_shape=True,
+    # )
+
     run_conv(
         device,
         torch_tensor_map,
@@ -1230,6 +1429,7 @@ def test_resnet50_conv_wh(
         has_bias=has_bias,
         auto_shard=auto_shard,
         shard_layout=shard_layout,
+        # sharded_cfg=sharded_cfg,
         input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
     )
 

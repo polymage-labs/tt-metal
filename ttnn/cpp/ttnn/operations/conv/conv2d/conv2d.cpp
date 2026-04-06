@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <iostream>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/assert.hpp>
@@ -62,6 +63,8 @@ Result conv2d_L1(
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
     auto orig_stride = stride;
+
+    std::cout << "----------- Inside conv2d_L1 -----------" << std::endl;
 
     auto input_tensor = fold_input_tensor_if_required(
         input_tensor_,
@@ -325,6 +328,8 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }  // Matmul expects inputs to be in Tile Layout
     tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
+
+    std::cout << "----------- Before matmul -----------" << std::endl;
 
     // run conv as matmul
     std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
